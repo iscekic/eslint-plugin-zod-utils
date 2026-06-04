@@ -1,6 +1,8 @@
 import { ESLintUtils } from "@typescript-eslint/utils";
 import type { ParserServices, TSESTree } from "@typescript-eslint/utils";
-import ts, { type Type } from "typescript";
+import type { Symbol as TypeScriptSymbol, Type, TypeChecker } from "typescript";
+
+const TYPESCRIPT_SYMBOL_FLAGS_ALIAS = 1 << 21;
 
 const ZOD_IMPORT_SOURCES = new Set([
   "zod",
@@ -595,14 +597,14 @@ function isZodSchemaType(type: Type, services: ParserServices, seen = new Set<Ty
   );
 }
 
-function isZodSymbol(symbol: ts.Symbol | undefined, checker: ts.TypeChecker): boolean {
+function isZodSymbol(symbol: TypeScriptSymbol | undefined, checker: TypeChecker): boolean {
   if (!symbol) {
     return false;
   }
 
   const symbols = [symbol];
 
-  if ((symbol.flags & ts.SymbolFlags.Alias) !== 0) {
+  if ((symbol.flags & TYPESCRIPT_SYMBOL_FLAGS_ALIAS) !== 0) {
     symbols.push(checker.getAliasedSymbol(symbol));
   }
 

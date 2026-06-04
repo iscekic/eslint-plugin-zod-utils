@@ -1,6 +1,6 @@
 {
   "name": "eslint-plugin-zod-utils",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "ESLint utilities for safer Zod schema usage.",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -20,10 +20,11 @@
   ],
   "scripts": {
     "build": "tsup src/index.ts --format esm,cjs --dts --clean --external @typescript-eslint/utils",
+    "check:bundle": "node scripts/check-bundle.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "prepack": "npm run lint && npm run typecheck && npm test && npm run build"
+    "prepack": "npm run lint && npm run typecheck && npm test && npm run build && npm run check:bundle"
   },
   "keywords": [
     "eslint",
