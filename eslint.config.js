@@ -24,4 +24,14 @@ export default tseslint.config(
       "@typescript-eslint/no-unnecessary-condition": "off",
     },
   },
+  {
+    files: [
+      "tests/fixtures/type-aware/schema-constraint-methods.ts",
+      "tests/fixtures/type-aware/schema-methods.ts",
+      "tests/fixtures/type-aware/v3-schema-methods.ts",
+    ],
+    rules: {
+      "@typescript-eslint/no-deprecated": "off",
+    },
+  },
 );

@@ -38,6 +38,10 @@ function readFixture(name: string): string {
   return readFileSync(new URL(`fixtures/type-aware/${name}`, import.meta.url), "utf8");
 }
 
+function inlineSchemaErrors(count: number): Array<{ messageId: "inlineSchema" }> {
+  return Array.from({ length: count }, () => ({ messageId: "inlineSchema" }));
+}
+
 ruleTester.run("no-inline-zod-schema", noInlineZodSchema, {
   valid: [
     {
@@ -332,6 +336,72 @@ typeAwareRuleTester.run("no-inline-zod-schema typed schema roots", noInlineZodSc
       name: "reports imported Zod schema combinators without inline z calls",
       code: readFixture("extend.ts"),
       errors: [{ messageId: "inlineSchema" }],
+    },
+    {
+      filename: `${tsconfigRootDir}/tests/fixtures/type-aware/safe-extend.ts`,
+      name: "reports imported Zod safeExtend combinators without inline z calls",
+      code: readFixture("safe-extend.ts"),
+      errors: [{ messageId: "inlineSchema" }],
+    },
+    {
+      filename: `${tsconfigRootDir}/tests/fixtures/type-aware/namespace-schema-roots.ts`,
+      name: "reports Zod schema methods through namespace-imported schema roots",
+      code: readFixture("namespace-schema-roots.ts"),
+      errors: inlineSchemaErrors(2),
+    },
+    {
+      filename: `${tsconfigRootDir}/tests/fixtures/type-aware/schema-container-roots.ts`,
+      name: "reports Zod schema methods through object-contained schema roots",
+      code: readFixture("schema-container-roots.ts"),
+      errors: inlineSchemaErrors(2),
+    },
+    {
+      filename: `${tsconfigRootDir}/tests/fixtures/type-aware/schema-return-roots.ts`,
+      name: "reports Zod schema methods through schema-returning call roots",
+      code: readFixture("schema-return-roots.ts"),
+      errors: inlineSchemaErrors(2),
+    },
+    {
+      filename: `${tsconfigRootDir}/tests/fixtures/type-aware/schema-methods.ts`,
+      name: "reports imported Zod schema-producing methods without inline z calls",
+      code: readFixture("schema-methods.ts"),
+      errors: inlineSchemaErrors(11),
+    },
+    {
+      filename: `${tsconfigRootDir}/tests/fixtures/type-aware/schema-constraint-methods.ts`,
+      name: "reports imported Zod schema constraint methods without inline z calls",
+      code: readFixture("schema-constraint-methods.ts"),
+      errors: inlineSchemaErrors(33),
+    },
+    {
+      filename: `${tsconfigRootDir}/tests/fixtures/type-aware/schema-enum-methods.ts`,
+      name: "reports imported Zod enum schema-producing methods without inline z calls",
+      code: readFixture("schema-enum-methods.ts"),
+      errors: inlineSchemaErrors(2),
+    },
+    {
+      filename: `${tsconfigRootDir}/tests/fixtures/type-aware/v3-schema-methods.ts`,
+      name: "reports Zod v3 schema-producing methods without inline z calls",
+      code: readFixture("v3-schema-methods.ts"),
+      errors: inlineSchemaErrors(25),
+    },
+    {
+      filename: `${tsconfigRootDir}/tests/fixtures/type-aware/reexported-zod-factories.ts`,
+      name: "reports Zod factories imported through local re-exports",
+      code: readFixture("reexported-zod-factories.ts"),
+      errors: inlineSchemaErrors(2),
+    },
+    {
+      filename: `${tsconfigRootDir}/tests/fixtures/type-aware/reexported-zod-star-factories.ts`,
+      name: "reports Zod factories imported through local star and default re-exports",
+      code: readFixture("reexported-zod-star-factories.ts"),
+      errors: inlineSchemaErrors(3),
+    },
+    {
+      filename: `${tsconfigRootDir}/tests/fixtures/type-aware/reexported-zod-namespace-factories.ts`,
+      name: "reports Zod factories imported through local namespace and default re-exports",
+      code: readFixture("reexported-zod-namespace-factories.ts"),
+      errors: inlineSchemaErrors(3),
     },
   ],
 });
