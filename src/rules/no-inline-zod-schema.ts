@@ -1,5 +1,6 @@
 import { ESLintUtils } from "@typescript-eslint/utils";
-import type { TSESTree } from "@typescript-eslint/utils";
+import type { ParserServices, TSESTree } from "@typescript-eslint/utils";
+import type { Type } from "typescript";
 
 const ZOD_FACTORY_IMPORTS = new Set([
   "any",
@@ -63,6 +64,39 @@ const ZOD_FACTORY_IMPORTS = new Set([
 
 const ZOD_NAMESPACE_IMPORTS = new Set(["z", "coerce", "iso"]);
 
+const ZOD_EXECUTION_METHODS = new Set([
+  "parse",
+  "parseAsync",
+  "safeParse",
+  "safeParseAsync",
+]);
+
+const ZOD_SCHEMA_COMBINATOR_METHODS = new Set([
+  "and",
+  "array",
+  "brand",
+  "catchall",
+  "deepPartial",
+  "describe",
+  "extend",
+  "merge",
+  "nullable",
+  "nullish",
+  "omit",
+  "optional",
+  "or",
+  "partial",
+  "passthrough",
+  "pick",
+  "readonly",
+  "refine",
+  "required",
+  "strict",
+  "strip",
+  "superRefine",
+  "transform",
+]);
+
 type ScopeLike = {
   set?: Map<string, VariableLike>;
   upper?: ScopeLike | null;
@@ -124,8 +158,50 @@ function getRootIdentifier(node: TSESTree.Node | null | undefined): TSESTree.Ide
   }
 }
 
+function getRootMethodName(node: TSESTree.Node): string | null {
+  let current = node;
+  let rootMethodName: string | null = null;
+
+  while (true) {
+    if (current.type === "CallExpression") {
+      current = current.callee;
+      continue;
+    }
+
+    if (current.type === "MemberExpression") {
+      if (
+        current.object.type === "Identifier" &&
+        !current.computed &&
+        current.property.type === "Identifier"
+      ) {
+        rootMethodName = current.property.name;
+      }
+
+      current = current.object;
+      continue;
+    }
+
+    return rootMethodName;
+  }
+}
+
+function getCallMethodName(node: TSESTree.CallExpression): string | null {
+  const { callee } = node;
+
+  if (
+    callee.type === "MemberExpression" &&
+    !callee.computed &&
+    callee.property.type === "Identifier"
+  ) {
+    return callee.property.name;
+  }
+
+  return null;
+}
+
 function isZodImportSpecifier(node: TSESTree.Node): boolean {
   if (
+    node.type !== "ImportDefaultSpecifier" &&
     node.type !== "ImportNamespaceSpecifier" &&
     node.type !== "ImportSpecifier"
   ) {
@@ -142,7 +218,7 @@ function isZodImportSpecifier(node: TSESTree.Node): boolean {
     return false;
   }
 
-  if (node.type === "ImportNamespaceSpecifier") {
+  if (node.type === "ImportDefaultSpecifier" || node.type === "ImportNamespaceSpecifier") {
     return true;
   }
 
@@ -154,6 +230,56 @@ function isZodImportSpecifier(node: TSESTree.Node): boolean {
     node.imported.type === "Identifier" ? node.imported.name : node.imported.value;
 
   return ZOD_NAMESPACE_IMPORTS.has(importedName) || ZOD_FACTORY_IMPORTS.has(importedName);
+}
+
+function hasFullTypeInformation(
+  services: ParserServices,
+): services is ParserServices & { program: NonNullable<ParserServices["program"]> } {
+  return services.program !== null;
+}
+
+function isZodDeclarationFile(fileName: string): boolean {
+  return /(?:^|[/\\])node_modules[/\\]zod[/\\]/u.test(fileName);
+}
+
+function isZodSchemaType(type: Type, services: ParserServices, seen = new Set<Type>()): boolean {
+  if (!hasFullTypeInformation(services)) {
+    return false;
+  }
+
+  if (seen.has(type)) {
+    return false;
+  }
+
+  seen.add(type);
+
+  const symbols = [type.getSymbol(), type.aliasSymbol];
+
+  if (
+    symbols.some((symbol) =>
+      symbol?.getDeclarations()?.some((declaration) =>
+        isZodDeclarationFile(declaration.getSourceFile().fileName),
+      ),
+    )
+  ) {
+    return true;
+  }
+
+  if (type.isUnionOrIntersection()) {
+    return type.types.some((subType) => isZodSchemaType(subType, services, seen));
+  }
+
+  if (type.getBaseTypes()?.some((baseType) => isZodSchemaType(baseType, services, seen))) {
+    return true;
+  }
+
+  const parseSymbol = type.getProperty("parse");
+
+  return (
+    parseSymbol?.getDeclarations()?.some((declaration) =>
+      isZodDeclarationFile(declaration.getSourceFile().fileName),
+    ) ?? false
+  );
 }
 
 export const noInlineZodSchema = ESLintUtils.RuleCreator(
@@ -174,8 +300,19 @@ export const noInlineZodSchema = ESLintUtils.RuleCreator(
   defaultOptions: [],
   create(context) {
     const sourceCode = context.sourceCode;
+    const parserServices = ESLintUtils.getParserServices(context, true);
+
+    function isZodExecutionCall(node: TSESTree.CallExpression): boolean {
+      const methodName = getCallMethodName(node);
+
+      return methodName !== null && ZOD_EXECUTION_METHODS.has(methodName);
+    }
 
     function isZodSchemaCall(node: TSESTree.CallExpression): boolean {
+      if (isZodExecutionCall(node)) {
+        return false;
+      }
+
       const root = getRootIdentifier(node.callee);
 
       if (!root) {
@@ -188,11 +325,40 @@ export const noInlineZodSchema = ESLintUtils.RuleCreator(
       return variable?.defs.some((definition) => isZodImportSpecifier(definition.node)) ?? false;
     }
 
-    function hasZodCallAncestor(node: TSESTree.Node): boolean {
+    function isTypedZodSchemaCombinatorCall(node: TSESTree.CallExpression): boolean {
+      const rootMethodName = getRootMethodName(node);
+
+      if (
+        rootMethodName === null ||
+        !ZOD_SCHEMA_COMBINATOR_METHODS.has(rootMethodName)
+      ) {
+        return false;
+      }
+
+      const root = getRootIdentifier(node.callee);
+
+      if (!root) {
+        return false;
+      }
+
+      if (!hasFullTypeInformation(parserServices)) {
+        return false;
+      }
+
+      const type = parserServices.getTypeAtLocation(root);
+
+      return isZodSchemaType(type, parserServices);
+    }
+
+    function isSchemaCreationCall(node: TSESTree.CallExpression): boolean {
+      return isZodSchemaCall(node) || isTypedZodSchemaCombinatorCall(node);
+    }
+
+    function hasSchemaCreationCallAncestor(node: TSESTree.Node): boolean {
       let current = node.parent;
 
       while (current) {
-        if (current.type === "CallExpression" && isZodSchemaCall(current)) {
+        if (current.type === "CallExpression" && isSchemaCreationCall(current)) {
           return true;
         }
 
@@ -226,11 +392,11 @@ export const noInlineZodSchema = ESLintUtils.RuleCreator(
 
     return {
       CallExpression(node) {
-        if (!isZodSchemaCall(node)) {
+        if (!isSchemaCreationCall(node)) {
           return;
         }
 
-        if (hasZodCallAncestor(node)) {
+        if (hasSchemaCreationCallAncestor(node)) {
           return;
         }
 
