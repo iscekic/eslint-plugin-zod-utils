@@ -1,5 +1,7 @@
 import parser from "@typescript-eslint/parser";
 import { RuleTester } from "@typescript-eslint/rule-tester";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { afterAll, describe, it } from "vitest";
 import { noInlineZodSchema } from "../src/rules/no-inline-zod-schema.js";
 
@@ -17,6 +19,24 @@ const ruleTester = new RuleTester({
     },
   },
 });
+
+const tsconfigRootDir = fileURLToPath(new URL("..", import.meta.url));
+
+const typeAwareRuleTester = new RuleTester({
+  languageOptions: {
+    parser,
+    parserOptions: {
+      ecmaVersion: 2024,
+      projectService: true,
+      sourceType: "module",
+      tsconfigRootDir,
+    },
+  },
+});
+
+function readFixture(name: string): string {
+  return readFileSync(new URL(`fixtures/type-aware/${name}`, import.meta.url), "utf8");
+}
 
 ruleTester.run("no-inline-zod-schema", noInlineZodSchema, {
   valid: [
@@ -125,6 +145,24 @@ ruleTester.run("no-inline-zod-schema", noInlineZodSchema, {
         }
       `,
     },
+    {
+      name: "ignores global z references because the rule does not assume z is Zod",
+      code: `
+        function build() {
+          return z.string();
+        }
+      `,
+    },
+    {
+      name: "does not infer imported schema roots by name without type information",
+      code: `
+        import { UserZodSchema } from "./schemas";
+
+        function build() {
+          return UserZodSchema.pick({ id: true });
+        }
+      `,
+    },
   ],
   invalid: [
     {
@@ -196,6 +234,17 @@ ruleTester.run("no-inline-zod-schema", noInlineZodSchema, {
       errors: [{ messageId: "inlineSchema" }],
     },
     {
+      name: "reports default z imports outside module scope",
+      code: `
+        import z from "zod";
+
+        function getSchema() {
+          return z.string();
+        }
+      `,
+      errors: [{ messageId: "inlineSchema" }],
+    },
+    {
       name: "reports direct named Zod factories outside module scope",
       code: `
         import { object, string } from "zod";
@@ -219,6 +268,30 @@ ruleTester.run("no-inline-zod-schema", noInlineZodSchema, {
           });
         }
       `,
+      errors: [{ messageId: "inlineSchema" }],
+    },
+  ],
+});
+
+typeAwareRuleTester.run("no-inline-zod-schema typed schema roots", noInlineZodSchema, {
+  valid: [
+    {
+      filename: `${tsconfigRootDir}/tests/fixtures/type-aware/non-zod-builder.ts`,
+      name: "ignores imported non-Zod builders with schema-like method names",
+      code: readFixture("non-zod-builder.ts"),
+    },
+  ],
+  invalid: [
+    {
+      filename: `${tsconfigRootDir}/tests/fixtures/type-aware/pick.ts`,
+      name: "reports imported Zod schema combinators outside module scope",
+      code: readFixture("pick.ts"),
+      errors: [{ messageId: "inlineSchema" }],
+    },
+    {
+      filename: `${tsconfigRootDir}/tests/fixtures/type-aware/extend.ts`,
+      name: "reports imported Zod schema combinators without inline z calls",
+      code: readFixture("extend.ts"),
       errors: [{ messageId: "inlineSchema" }],
     },
   ],
