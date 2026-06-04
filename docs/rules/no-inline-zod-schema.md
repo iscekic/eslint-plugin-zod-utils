@@ -34,6 +34,14 @@ app.post("/users", {
 });
 ```
 
+```ts
+import { UserSchema } from "./schemas";
+
+const PublicUserSchema = UserSchema.pick({
+  id: true,
+});
+```
+
 ## Disallowed
 
 ```ts
@@ -56,6 +64,30 @@ app.post("/users", (request) => {
 });
 ```
 
+```ts
+import z from "zod";
+
+function buildSchema() {
+  return z.string();
+}
+```
+
+```ts
+import { UserSchema } from "./schemas";
+
+function buildSchema() {
+  return UserSchema.pick({
+    id: true,
+  });
+}
+```
+
 ## Notes
 
 Nested field schemas inside an allowed module-initialized schema are allowed. For example, `z.string()` is valid inside a module-level `z.object({ id: z.string() })`.
+
+The rule recognizes named, namespace, aliased, default, and direct factory imports from `zod`.
+
+When `@typescript-eslint/parser` provides type information, the rule also detects derived schemas created from imported Zod schema values through combinators such as `.extend()`, `.pick()`, `.omit()`, `.merge()`, `.partial()`, `.optional()`, `.nullable()`, `.array()`, `.transform()`, and `.refine()`.
+
+The rule does not infer schemas from variable names and does not assume a global `z` identifier refers to Zod.

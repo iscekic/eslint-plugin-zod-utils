@@ -102,6 +102,27 @@ app.post("/users", {
 ```
 
 The rule understands `import { z } from "zod"`, `import * as zod from "zod"`, aliased `z` imports, and direct named schema factories such as `import { object, string } from "zod"`.
+It also understands default imports such as `import z from "zod"`.
+
+When type information is available through `@typescript-eslint/parser`, the rule also reports repeated derived schema creation from imported Zod schemas:
+
+```ts
+import { UserSchema } from "./schemas";
+
+function getPublicSchema() {
+  return UserSchema.pick({ id: true });
+}
+```
+
+```ts
+import { BaseSchema, TenantIdSchema } from "./schemas";
+
+function getTenantSchema() {
+  return BaseSchema.extend({ tenantId: TenantIdSchema });
+}
+```
+
+This type-aware detection does not use schema-name conventions. If type information is unavailable, imported schema roots are not inferred from names such as `UserSchema` or `UserZodSchema`. The rule also does not assume a global `z` identifier refers to Zod.
 
 ## Development
 
