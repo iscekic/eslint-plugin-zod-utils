@@ -163,6 +163,20 @@ ruleTester.run("no-inline-zod-schema", noInlineZodSchema, {
         }
       `,
     },
+    {
+      name: "ignores Zod error formatting utilities inside functions",
+      code: `
+        import { z } from "zod";
+
+        function formatError(error: z.ZodError) {
+          return {
+            flattened: z.flattenError(error),
+            pretty: z.prettifyError(error),
+            tree: z.treeifyError(error),
+          };
+        }
+      `,
+    },
   ],
   invalid: [
     {
@@ -269,6 +283,31 @@ ruleTester.run("no-inline-zod-schema", noInlineZodSchema, {
         }
       `,
       errors: [{ messageId: "inlineSchema" }],
+    },
+    {
+      name: "reports Zod namespace schema factories outside module scope",
+      code: `
+        import { iso as zodIso, z } from "zod";
+
+        function getSchemas(jsonSchema: Parameters<typeof z.fromJSONSchema>[0]) {
+          return [
+            z.coerce.string(),
+            z.fromJSONSchema(jsonSchema),
+            z.iso.datetime(),
+            zodIso.datetime(),
+            z.looseObject({ id: z.string() }),
+            z.strictObject({ id: z.string() }),
+          ];
+        }
+      `,
+      errors: [
+        { messageId: "inlineSchema" },
+        { messageId: "inlineSchema" },
+        { messageId: "inlineSchema" },
+        { messageId: "inlineSchema" },
+        { messageId: "inlineSchema" },
+        { messageId: "inlineSchema" },
+      ],
     },
   ],
 });
