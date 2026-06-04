@@ -1,10 +1,10 @@
 # `zod-utils/no-inline-zod-schema`
 
-Disallows creating Zod schemas outside module-level variable declarations.
+Disallows creating Zod schemas outside module initialization.
 
 ## Why
 
-Zod schemas are immutable runtime objects. Creating them inline in functions, callbacks, hooks, render paths, or arguments repeatedly allocates equivalent schema objects and makes schemas harder to share, test, and inspect.
+Zod schemas are immutable runtime objects. Creating them inline in functions, callbacks, hooks, render paths, or instance fields repeatedly allocates equivalent schema objects and makes schemas harder to share, test, and inspect.
 
 ## Allowed
 
@@ -24,6 +24,16 @@ export const UserSchema = object({
 });
 ```
 
+```ts
+import { z } from "zod";
+
+app.post("/users", {
+  body: z.object({
+    id: z.string(),
+  }),
+});
+```
+
 ## Disallowed
 
 ```ts
@@ -39,11 +49,13 @@ function buildSchema() {
 ```ts
 import { z } from "zod";
 
-const parser = createParser(z.object({
-  id: z.string(),
-}));
+app.post("/users", (request) => {
+  return z.object({
+    id: z.string(),
+  }).parse(request.body);
+});
 ```
 
 ## Notes
 
-Nested field schemas inside an allowed top-level schema are allowed. For example, `z.string()` is valid inside a top-level `z.object({ id: z.string() })`.
+Nested field schemas inside an allowed module-initialized schema are allowed. For example, `z.string()` is valid inside a module-level `z.object({ id: z.string() })`.

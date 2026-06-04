@@ -82,6 +82,40 @@ ruleTester.run("no-inline-zod-schema", noInlineZodSchema, {
       `,
     },
     {
+      name: "allows top-level route config schemas because they are evaluated once",
+      code: `
+        import { z } from "zod";
+
+        app.post("/users", {
+          body: z.object({
+            id: z.string(),
+          }),
+        });
+      `,
+    },
+    {
+      name: "allows schemas passed to top-level factory calls because they are evaluated once",
+      code: `
+        import { z } from "zod";
+
+        export const parser = createParser(z.object({
+          id: z.string(),
+        }));
+      `,
+    },
+    {
+      name: "allows static class field schemas because they are evaluated once with the class definition",
+      code: `
+        import { z } from "zod";
+
+        class Parser {
+          static schema = z.object({
+            id: z.string(),
+          });
+        }
+      `,
+    },
+    {
       name: "ignores non-Zod objects named z when zod is not imported",
       code: `
         const z = createBuilder();
@@ -116,17 +150,6 @@ ruleTester.run("no-inline-zod-schema", noInlineZodSchema, {
         const makeSchema = () => z.object({
           id: z.string(),
         });
-      `,
-      errors: [{ messageId: "inlineSchema" }],
-    },
-    {
-      name: "reports a schema passed as a function argument",
-      code: `
-        import { z } from "zod";
-
-        export const parser = createParser(z.object({
-          id: z.string(),
-        }));
       `,
       errors: [{ messageId: "inlineSchema" }],
     },
@@ -186,12 +209,12 @@ ruleTester.run("no-inline-zod-schema", noInlineZodSchema, {
       errors: [{ messageId: "inlineSchema" }],
     },
     {
-      name: "reports class field schemas because classes are not module-level declarations",
+      name: "reports instance class field schemas because they are evaluated for each instance",
       code: `
         import { z } from "zod";
 
         class Parser {
-          static schema = z.object({
+          schema = z.object({
             id: z.string(),
           });
         }

@@ -156,46 +156,6 @@ function isZodImportSpecifier(node: TSESTree.Node): boolean {
   return ZOD_NAMESPACE_IMPORTS.has(importedName) || ZOD_FACTORY_IMPORTS.has(importedName);
 }
 
-function unwrapExpression(node: TSESTree.Node): TSESTree.Node {
-  let current = node;
-
-  while (
-    current.parent?.type === "TSAsExpression" ||
-    current.parent?.type === "TSNonNullExpression" ||
-    current.parent?.type === "TSSatisfiesExpression" ||
-    current.parent?.type === "TSTypeAssertion"
-  ) {
-    current = current.parent;
-  }
-
-  return current;
-}
-
-function isModuleLevelVariableInitializer(node: TSESTree.CallExpression): boolean {
-  const expression = unwrapExpression(node);
-
-  if (expression.parent?.type !== "VariableDeclarator") {
-    return false;
-  }
-
-  if (expression.parent.init !== expression) {
-    return false;
-  }
-
-  const declaration = expression.parent.parent;
-
-  if (declaration.type !== "VariableDeclaration") {
-    return false;
-  }
-
-  const container = declaration.parent;
-
-  return (
-    container.type === "Program" ||
-    (container.type === "ExportNamedDeclaration" && container.parent.type === "Program")
-  );
-}
-
 export const noInlineZodSchema = ESLintUtils.RuleCreator(
   (ruleName) => `https://www.npmjs.com/package/eslint-plugin-zod-utils#${ruleName}`,
 )({
@@ -207,7 +167,7 @@ export const noInlineZodSchema = ESLintUtils.RuleCreator(
     },
     messages: {
       inlineSchema:
-        "Create Zod schemas at module scope instead of inline inside functions, callbacks, classes, or arguments.",
+        "Create Zod schemas during module initialization instead of inside functions, callbacks, or other repeated execution paths.",
     },
     schema: [],
   },
@@ -242,6 +202,28 @@ export const noInlineZodSchema = ESLintUtils.RuleCreator(
       return false;
     }
 
+    function isInsideRepeatedExecutionPath(node: TSESTree.Node): boolean {
+      let current = node.parent;
+
+      while (current) {
+        if (
+          current.type === "FunctionDeclaration" ||
+          current.type === "FunctionExpression" ||
+          current.type === "ArrowFunctionExpression"
+        ) {
+          return true;
+        }
+
+        if (current.type === "PropertyDefinition" && !current.static) {
+          return true;
+        }
+
+        current = current.parent;
+      }
+
+      return false;
+    }
+
     return {
       CallExpression(node) {
         if (!isZodSchemaCall(node)) {
@@ -252,7 +234,7 @@ export const noInlineZodSchema = ESLintUtils.RuleCreator(
           return;
         }
 
-        if (isModuleLevelVariableInitializer(node)) {
+        if (!isInsideRepeatedExecutionPath(node)) {
           return;
         }
 

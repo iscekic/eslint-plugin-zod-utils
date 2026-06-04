@@ -49,7 +49,7 @@ Legacy eslintrc:
 
 ### `zod-utils/no-inline-zod-schema`
 
-Requires Zod schemas to be created as module-level variable declarations. This avoids recreating schemas inside functions, callbacks, render paths, hooks, or argument lists.
+Requires Zod schemas to be created during module initialization. This avoids recreating schemas inside functions, callbacks, render paths, hooks, or instance fields.
 
 This rule was inspired by the motivation behind [`babel-plugin-zod-hoist`](https://github.com/gajus/babel-plugin-zod-hoist#motivation), which documents the cost of repeatedly initializing equivalent Zod schemas and the benefits of hoisting them.
 
@@ -70,10 +70,10 @@ function parseUser(input: unknown) {
 ```ts
 import { z } from "zod";
 
-app.post("/users", {
-  body: z.object({
+app.post("/users", (request) => {
+  return z.object({
     id: z.string(),
-  }),
+  }).parse(request.body);
 });
 ```
 
@@ -89,6 +89,16 @@ const UserSchema = z.object({
 function parseUser(input: unknown) {
   return UserSchema.parse(input);
 }
+```
+
+```ts
+import { z } from "zod";
+
+app.post("/users", {
+  body: z.object({
+    id: z.string(),
+  }),
+});
 ```
 
 The rule understands `import { z } from "zod"`, `import * as zod from "zod"`, aliased `z` imports, and direct named schema factories such as `import { object, string } from "zod"`.
