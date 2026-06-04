@@ -70,9 +70,11 @@ function parseUser(input: unknown) {
 ```ts
 import { z } from "zod";
 
-const parser = createParser(z.object({
-  id: z.string(),
-}));
+app.post("/users", {
+  body: z.object({
+    id: z.string(),
+  }),
+});
 ```
 
 Valid:
