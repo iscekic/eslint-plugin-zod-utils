@@ -51,6 +51,8 @@ Legacy eslintrc:
 
 Requires Zod schemas to be created as module-level variable declarations. This avoids recreating schemas inside functions, callbacks, render paths, hooks, or argument lists.
 
+This rule was inspired by the motivation behind [`babel-plugin-zod-hoist`](https://github.com/gajus/babel-plugin-zod-hoist#motivation), which documents the cost of repeatedly initializing equivalent Zod schemas and the benefits of hoisting them.
+
 Invalid:
 
 ```ts
