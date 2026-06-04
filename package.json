@@ -33,6 +33,11 @@
     "zod",
     "typescript"
   ],
+  "homepage": "https://github.com/iscekic/eslint-plugin-zod-utils",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iscekic/eslint-plugin-zod-utils.git"
+  },
   "author": "",
   "license": "MIT",
   "peerDependencies": {
