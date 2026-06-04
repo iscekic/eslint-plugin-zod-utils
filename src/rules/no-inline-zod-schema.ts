@@ -1,3 +1,5 @@
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { ESLintUtils } from "@typescript-eslint/utils";
 import type { ParserServices, TSESTree } from "@typescript-eslint/utils";
 import type { Symbol as TypeScriptSymbol, Type, TypeChecker } from "typescript";
@@ -293,6 +295,28 @@ function getCallMethodName(node: TSESTree.CallExpression): string | null {
   return null;
 }
 
+function isPotentialZodCallCallee(node: TSESTree.Node): boolean {
+  const callee = unwrapExpression(node);
+
+  if (callee.type === "Identifier") {
+    return true;
+  }
+
+  if (callee.type !== "MemberExpression") {
+    return false;
+  }
+
+  const methodName = getStaticMemberName(callee);
+
+  return (
+    methodName !== null &&
+    (ZOD_FACTORY_IMPORTS.has(methodName) ||
+      ZOD_DIRECT_COMBINATOR_IMPORTS.has(methodName) ||
+      ZOD_ISO_FACTORY_IMPORTS.has(methodName) ||
+      ZOD_SCHEMA_COMBINATOR_METHODS.has(methodName))
+  );
+}
+
 type ZodImportKind =
   | { type: "factory" }
   | { importedName: string; memberPath: string[]; type: "namespace" };
@@ -557,9 +581,20 @@ function isZodDeclarationFile(fileName: string): boolean {
   return /(?:^|[/\\])node_modules[/\\]zod[/\\]/u.test(fileName);
 }
 
-function isZodSchemaType(type: Type, services: ParserServices, seen = new Set<Type>()): boolean {
+function isZodSchemaType(
+  type: Type,
+  services: ParserServices,
+  cache?: WeakMap<Type, boolean>,
+  seen = new Set<Type>(),
+): boolean {
   if (!hasFullTypeInformation(services)) {
     return false;
+  }
+
+  const cachedResult = cache?.get(type);
+
+  if (cachedResult !== undefined) {
+    return cachedResult;
   }
 
   if (seen.has(type)) {
@@ -570,6 +605,8 @@ function isZodSchemaType(type: Type, services: ParserServices, seen = new Set<Ty
 
   const symbols = [type.getSymbol(), type.aliasSymbol];
 
+  let result: boolean;
+
   if (
     symbols.some((symbol) =>
       symbol?.getDeclarations()?.some((declaration) =>
@@ -577,29 +614,44 @@ function isZodSchemaType(type: Type, services: ParserServices, seen = new Set<Ty
       ),
     )
   ) {
-    return true;
+    result = true;
+  } else if (type.isUnionOrIntersection()) {
+    result = type.types.some((subType) =>
+      isZodSchemaType(subType, services, cache, seen),
+    );
+  } else if (
+    type.getBaseTypes()?.some((baseType) =>
+      isZodSchemaType(baseType, services, cache, seen),
+    )
+  ) {
+    result = true;
+  } else {
+    const parseSymbol = type.getProperty("parse");
+
+    result =
+      parseSymbol?.getDeclarations()?.some((declaration) =>
+        isZodDeclarationFile(declaration.getSourceFile().fileName),
+      ) ?? false;
   }
 
-  if (type.isUnionOrIntersection()) {
-    return type.types.some((subType) => isZodSchemaType(subType, services, seen));
-  }
+  cache?.set(type, result);
 
-  if (type.getBaseTypes()?.some((baseType) => isZodSchemaType(baseType, services, seen))) {
-    return true;
-  }
-
-  const parseSymbol = type.getProperty("parse");
-
-  return (
-    parseSymbol?.getDeclarations()?.some((declaration) =>
-      isZodDeclarationFile(declaration.getSourceFile().fileName),
-    ) ?? false
-  );
+  return result;
 }
 
-function isZodSymbol(symbol: TypeScriptSymbol | undefined, checker: TypeChecker): boolean {
+function isZodSymbol(
+  symbol: TypeScriptSymbol | undefined,
+  checker: TypeChecker,
+  cache?: WeakMap<TypeScriptSymbol, boolean>,
+): boolean {
   if (!symbol) {
     return false;
+  }
+
+  const cachedResult = cache?.get(symbol);
+
+  if (cachedResult !== undefined) {
+    return cachedResult;
   }
 
   const symbols = [symbol];
@@ -608,15 +660,15 @@ function isZodSymbol(symbol: TypeScriptSymbol | undefined, checker: TypeChecker)
     symbols.push(checker.getAliasedSymbol(symbol));
   }
 
-  return symbols.some((candidate) =>
+  const result = symbols.some((candidate) =>
     candidate.getDeclarations()?.some((declaration) =>
       isZodDeclarationFile(declaration.getSourceFile().fileName),
     ),
   );
-}
 
-function isImportDefinition(variable: VariableLike | null): boolean {
-  return variable?.defs.some((definition) => definition.type === "ImportBinding") ?? false;
+  cache?.set(symbol, result);
+
+  return result;
 }
 
 export const noInlineZodSchema = ESLintUtils.RuleCreator(
@@ -638,8 +690,101 @@ export const noInlineZodSchema = ESLintUtils.RuleCreator(
   create(context) {
     const sourceCode = context.sourceCode;
     const parserServices = ESLintUtils.getParserServices(context, true);
+    const schemaCreationCallCache = new WeakMap<TSESTree.CallExpression, boolean>();
+    const importSourceCache = new Map<string, boolean>();
 
     const getScope = (node: TSESTree.Node): ScopeLike => sourceCode.getScope(node);
+
+    function resolveImportPath(source: string): string | null {
+      if (!source.startsWith(".") || context.filename === "<input>") {
+        return null;
+      }
+
+      const basePath = resolve(dirname(context.filename), source);
+      const candidates = source.endsWith(".js")
+        ? [
+            `${basePath.slice(0, -3)}.ts`,
+            `${basePath.slice(0, -3)}.tsx`,
+            basePath,
+          ]
+        : [
+            basePath,
+            `${basePath}.ts`,
+            `${basePath}.tsx`,
+            `${basePath}.js`,
+            resolve(basePath, "index.ts"),
+            resolve(basePath, "index.tsx"),
+            resolve(basePath, "index.js"),
+          ];
+
+      return (
+        candidates.find(
+          (candidate) => existsSync(candidate) && statSync(candidate).isFile(),
+        ) ?? null
+      );
+    }
+
+    function importSourceMayContainZodSchema(source: string): boolean {
+      if (isZodImportSource(source)) {
+        return true;
+      }
+
+      const importPath = resolveImportPath(source);
+
+      if (importPath === null) {
+        return false;
+      }
+
+      const cachedResult = importSourceCache.get(importPath);
+
+      if (cachedResult !== undefined) {
+        return cachedResult;
+      }
+
+      const result = /["']zod(?:\/[^"']*)?["']/u.test(readFileSync(importPath, "utf8"));
+
+      importSourceCache.set(importPath, result);
+
+      return result;
+    }
+
+    function isPotentialZodImportDefinition(variable: VariableLike | null): boolean {
+      return (
+        variable?.defs.some((definition) => {
+          const node = definition.node;
+
+          if (
+            node.type !== "ImportDefaultSpecifier" &&
+            node.type !== "ImportNamespaceSpecifier" &&
+            node.type !== "ImportSpecifier"
+          ) {
+            return false;
+          }
+
+          return (
+            node.parent.source !== null &&
+            importSourceMayContainZodSchema(node.parent.source.value)
+          );
+        }) ?? false
+      );
+    }
+
+    function fileMayContainZodSchemas(): boolean {
+      if (/["']zod(?:\/[^"']*)?["']/u.test(sourceCode.text)) {
+        return true;
+      }
+
+      return sourceCode.ast.body.some(
+        (statement) =>
+          statement.type === "ImportDeclaration" &&
+          typeof statement.source.value === "string" &&
+          importSourceMayContainZodSchema(statement.source.value),
+      );
+    }
+
+    if (!fileMayContainZodSchemas()) {
+      return {};
+    }
 
     function isZodExecutionCall(node: TSESTree.CallExpression): boolean {
       const methodName = getCallMethodName(node);
@@ -655,70 +800,145 @@ export const noInlineZodSchema = ESLintUtils.RuleCreator(
       return getZodReferenceFromExpression(node.callee, getScope)?.type === "factory";
     }
 
+    function isPotentialSchemaRootExpression(
+      node: TSESTree.Node,
+      seen = new Set<string>(),
+    ): boolean {
+      const expression = unwrapExpression(node);
+
+      if (expression.type === "CallExpression") {
+        return true;
+      }
+
+      if (expression.type === "MemberExpression") {
+        return isPotentialSchemaRootExpression(expression.object, seen);
+      }
+
+      if (expression.type === "ObjectExpression") {
+        return expression.properties.some(
+          (property) =>
+            property.type === "Property" &&
+            isPotentialSchemaRootExpression(property.value, seen),
+        );
+      }
+
+      if (expression.type !== "Identifier") {
+        return false;
+      }
+
+      if (seen.has(expression.name)) {
+        return false;
+      }
+
+      seen.add(expression.name);
+
+      const variable = findVariable(getScope(expression), expression.name);
+
+      if (!variable) {
+        return false;
+      }
+
+      if (isPotentialZodImportDefinition(variable)) {
+        return true;
+      }
+
+      return variable.defs.some((definition) => {
+        if (definition.node.type !== "VariableDeclarator" || !definition.node.init) {
+          return false;
+        }
+
+        const init = unwrapExpression(definition.node.init);
+
+        if (init.type === "CallExpression" && isZodSchemaCall(init)) {
+          return true;
+        }
+
+        if (getZodReferenceFromExpression(init, getScope)?.type === "factory") {
+          return true;
+        }
+
+        return isPotentialSchemaRootExpression(init, seen);
+      });
+    }
+
     function isTypedZodSchemaCall(node: TSESTree.CallExpression): boolean {
       if (!hasFullTypeInformation(parserServices) || isZodExecutionCall(node)) {
         return false;
       }
 
-      const schemaType = parserServices.getTypeAtLocation(node);
-
-      if (!isZodSchemaType(schemaType, parserServices)) {
-        return false;
-      }
-
       const callee = unwrapExpression(node.callee);
+      const checker = parserServices.program.getTypeChecker();
       let symbolNode: TSESTree.Node | null = null;
+      let symbol: TypeScriptSymbol | undefined;
+      let isZodCalleeSymbol = false;
+      let isImportedIdentifier = false;
 
       if (callee.type === "Identifier") {
         symbolNode = callee;
+        const variable = findVariable(getScope(callee), callee.name);
+        isImportedIdentifier = isPotentialZodImportDefinition(variable);
+
+        if (!isImportedIdentifier) {
+          return false;
+        }
+
+        const tsNode = parserServices.esTreeNodeToTSNodeMap.get(symbolNode);
+
+        symbol = checker.getSymbolAtLocation(tsNode);
+        isZodCalleeSymbol = isZodSymbol(symbol, checker);
       } else if (callee.type === "MemberExpression") {
         const methodName = getStaticMemberName(callee);
+        const isZodFactoryReference =
+          getZodReferenceFromExpression(callee, getScope)?.type === "factory";
 
         if (
-          methodName !== null &&
-          !ZOD_FACTORY_IMPORTS.has(methodName) &&
-          !ZOD_ISO_FACTORY_IMPORTS.has(methodName) &&
-          !ZOD_SCHEMA_COMBINATOR_METHODS.has(methodName) &&
-          getZodReferenceFromExpression(callee, getScope)?.type !== "factory"
+          methodName === null ||
+          (!ZOD_FACTORY_IMPORTS.has(methodName) &&
+            !ZOD_ISO_FACTORY_IMPORTS.has(methodName) &&
+            !ZOD_SCHEMA_COMBINATOR_METHODS.has(methodName) &&
+            !isZodFactoryReference)
         ) {
           return false;
         }
 
-        symbolNode = callee.property;
-
-        if (
-          methodName !== null &&
-          (ZOD_FACTORY_IMPORTS.has(methodName) ||
-            ZOD_ISO_FACTORY_IMPORTS.has(methodName) ||
-            ZOD_SCHEMA_COMBINATOR_METHODS.has(methodName))
-        ) {
-          return true;
+        if (!isPotentialSchemaRootExpression(callee.object)) {
+          return false;
         }
+
+        const receiverType = parserServices.getTypeAtLocation(callee.object);
+
+        return (
+          isZodFactoryReference ||
+          isZodSchemaType(receiverType, parserServices)
+        );
       }
 
       if (symbolNode === null) {
         return false;
       }
 
-      const checker = parserServices.program.getTypeChecker();
-      const tsNode = parserServices.esTreeNodeToTSNodeMap.get(symbolNode);
-      const symbol = checker.getSymbolAtLocation(tsNode);
+      const schemaType = parserServices.getTypeAtLocation(node);
 
-      if (isZodSymbol(symbol, checker)) {
-        return true;
-      }
-
-      if (callee.type === "Identifier") {
-        const variable = findVariable(getScope(callee), callee.name);
-
-        return isImportDefinition(variable);
-      }
-
-      return false;
+      return (
+        isZodSchemaType(schemaType, parserServices) &&
+        (isZodCalleeSymbol || isImportedIdentifier)
+      );
     }
 
     function isSchemaCreationCall(node: TSESTree.CallExpression): boolean {
-      return isZodSchemaCall(node) || isTypedZodSchemaCall(node);
+      const cachedResult = schemaCreationCallCache.get(node);
+
+      if (cachedResult !== undefined) {
+        return cachedResult;
+      }
+
+      const result =
+        isPotentialZodCallCallee(node.callee) &&
+        (isZodSchemaCall(node) || isTypedZodSchemaCall(node));
+
+      schemaCreationCallCache.set(node, result);
+
+      return result;
     }
 
     function isInModuleInitializationPath(node: TSESTree.Node): boolean {
@@ -821,15 +1041,15 @@ export const noInlineZodSchema = ESLintUtils.RuleCreator(
 
     return {
       CallExpression(node) {
+        if (!isInsideRepeatedExecutionPath(node)) {
+          return;
+        }
+
         if (!isSchemaCreationCall(node)) {
           return;
         }
 
         if (hasSchemaCreationCallAncestor(node)) {
-          return;
-        }
-
-        if (!isInsideRepeatedExecutionPath(node)) {
           return;
         }
 
