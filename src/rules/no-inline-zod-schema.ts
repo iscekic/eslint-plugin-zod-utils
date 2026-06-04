@@ -142,6 +142,23 @@ const ZOD_SCHEMA_COMBINATOR_METHODS = new Set([
   "transform",
 ]);
 
+const EAGER_CALLBACK_METHODS = new Set([
+  "every",
+  "filter",
+  "find",
+  "findIndex",
+  "findLast",
+  "findLastIndex",
+  "flatMap",
+  "forEach",
+  "map",
+  "reduce",
+  "reduceRight",
+  "some",
+  "sort",
+  "toSorted",
+]);
+
 type ScopeLike = {
   set?: Map<string, VariableLike>;
   upper?: ScopeLike | null;
@@ -550,7 +567,13 @@ export const noInlineZodSchema = ESLintUtils.RuleCreator(
         }
 
         if (parent.arguments.includes(node)) {
-          return isInModuleInitializationPath(parent);
+          const methodName = getCallMethodName(parent);
+
+          return (
+            methodName !== null &&
+            EAGER_CALLBACK_METHODS.has(methodName) &&
+            isInModuleInitializationPath(parent)
+          );
         }
       }
 

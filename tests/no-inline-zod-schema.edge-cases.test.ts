@@ -101,5 +101,42 @@ ruleTester.run("no-inline-zod-schema edge cases", noInlineZodSchema, {
       `,
       errors: [{ messageId: "inlineSchema" }],
     },
+    {
+      name: "reports schemas created inside top-level tRPC procedure callbacks",
+      code: `
+        import { z } from "zod";
+
+        export const router = createRouter({
+          getUser: procedure.query(async ({ input }) => {
+            const ResultSchema = z.object({
+              id: z.string(),
+            });
+
+            return ResultSchema.parse(input);
+          }),
+          updateUser: procedure.mutation(({ input }) => {
+            return z.object({
+              id: z.string(),
+            }).parse(input);
+          }),
+        });
+      `,
+      errors: [{ messageId: "inlineSchema" }, { messageId: "inlineSchema" }],
+    },
+    {
+      name: "reports schemas created inside top-level route handler callbacks",
+      code: `
+        import { z } from "zod";
+
+        app.post("/users", async (c) => {
+          const BodySchema = z.object({
+            id: z.string(),
+          });
+
+          return c.json(BodySchema.parse(await c.req.json()));
+        });
+      `,
+      errors: [{ messageId: "inlineSchema" }],
+    },
   ],
 });

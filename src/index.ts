@@ -29,7 +29,7 @@ type Plugin = {
 const plugin: Plugin = {
   meta: {
     name: "eslint-plugin-zod-utils",
-    version: "1.0.5",
+    version: "1.0.6",
   },
   rules,
   configs: {},
