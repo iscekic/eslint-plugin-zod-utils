@@ -11,6 +11,7 @@ const ZOD_FACTORY_IMPORTS = new Set([
   "boolean",
   "cidrv4",
   "cidrv6",
+  "codec",
   "cuid",
   "cuid2",
   "custom",
@@ -20,38 +21,65 @@ const ZOD_FACTORY_IMPORTS = new Set([
   "email",
   "emoji",
   "enum",
+  "exactOptional",
   "file",
+  "float32",
+  "float64",
   "function",
   "fromJSONSchema",
+  "guid",
+  "hash",
+  "hex",
+  "hostname",
+  "httpUrl",
   "instanceof",
+  "int",
+  "int32",
+  "int64",
   "intersection",
+  "invertCodec",
   "ipv4",
   "ipv6",
+  "json",
   "jwt",
+  "keyof",
   "ksuid",
   "lazy",
   "literal",
   "looseObject",
+  "looseRecord",
+  "mac",
   "map",
   "nan",
   "nanoid",
   "nativeEnum",
   "never",
+  "nonoptional",
   "null",
   "nullable",
+  "nullish",
   "number",
   "object",
   "optional",
+  "partialRecord",
+  "pipe",
+  "prefault",
   "preprocess",
   "promise",
+  "readonly",
   "record",
   "set",
   "string",
+  "stringFormat",
   "stringbool",
   "strictObject",
+  "success",
   "symbol",
   "templateLiteral",
+  "transform",
   "tuple",
+  "uint32",
+  "uint64",
   "undefined",
   "union",
   "unknown",
@@ -62,7 +90,19 @@ const ZOD_FACTORY_IMPORTS = new Set([
   "uuidv6",
   "uuidv7",
   "void",
+  "xor",
   "xid",
+]);
+
+const ZOD_DIRECT_COMBINATOR_IMPORTS = new Set([
+  "catchall",
+  "extend",
+  "merge",
+  "omit",
+  "partial",
+  "pick",
+  "required",
+  "safeExtend",
 ]);
 
 const ZOD_NAMESPACE_IMPORTS = new Set(["z", "coerce", "iso"]);
@@ -116,6 +156,11 @@ type VariableLike = {
   name: string;
 };
 
+type FunctionLike =
+  | TSESTree.ArrowFunctionExpression
+  | TSESTree.FunctionDeclaration
+  | TSESTree.FunctionExpression;
+
 function findVariable(scope: ScopeLike | null, name: string): VariableLike | null {
   let currentScope = scope;
 
@@ -129,6 +174,22 @@ function findVariable(scope: ScopeLike | null, name: string): VariableLike | nul
     }
 
     currentScope = currentScope.upper ?? null;
+  }
+
+  return null;
+}
+
+function getStaticMemberName(node: TSESTree.MemberExpression): string | null {
+  if (!node.computed && node.property.type === "Identifier") {
+    return node.property.name;
+  }
+
+  if (
+    node.computed &&
+    node.property.type === "Literal" &&
+    typeof node.property.value === "string"
+  ) {
+    return node.property.value;
   }
 
   return null;
@@ -174,12 +235,8 @@ function getRootMethodName(node: TSESTree.Node): string | null {
     }
 
     if (current.type === "MemberExpression") {
-      if (
-        current.object.type === "Identifier" &&
-        !current.computed &&
-        current.property.type === "Identifier"
-      ) {
-        rootMethodName = current.property.name;
+      if (current.object.type === "Identifier") {
+        rootMethodName = getStaticMemberName(current);
       }
 
       current = current.object;
@@ -216,11 +273,13 @@ function getMemberPathFromRoot(node: TSESTree.Node): string[] | null {
     }
 
     if (current.type === "MemberExpression") {
-      if (current.computed || current.property.type !== "Identifier") {
+      const memberName = getStaticMemberName(current);
+
+      if (memberName === null) {
         return null;
       }
 
-      memberPath.unshift(current.property.name);
+      memberPath.unshift(memberName);
       current = current.object;
       continue;
     }
@@ -234,10 +293,9 @@ function getCallMethodName(node: TSESTree.CallExpression): string | null {
 
   if (
     callee.type === "MemberExpression" &&
-    !callee.computed &&
-    callee.property.type === "Identifier"
+    getStaticMemberName(callee) !== null
   ) {
-    return callee.property.name;
+    return getStaticMemberName(callee);
   }
 
   return null;
@@ -281,7 +339,7 @@ function getZodImportKind(node: TSESTree.Node): ZodImportKind | null {
     return { importedName, type: "namespace" };
   }
 
-  if (ZOD_FACTORY_IMPORTS.has(importedName)) {
+  if (ZOD_FACTORY_IMPORTS.has(importedName) || ZOD_DIRECT_COMBINATOR_IMPORTS.has(importedName)) {
     return { type: "factory" };
   }
 
@@ -453,6 +511,52 @@ export const noInlineZodSchema = ESLintUtils.RuleCreator(
       return isZodSchemaCall(node) || isTypedZodSchemaCombinatorCall(node);
     }
 
+    function isInModuleInitializationPath(node: TSESTree.Node): boolean {
+      let current: TSESTree.Node | undefined = node;
+
+      while (current) {
+        if (current.type === "Program") {
+          return true;
+        }
+
+        if (
+          current.type === "FunctionDeclaration" ||
+          current.type === "FunctionExpression" ||
+          current.type === "ArrowFunctionExpression"
+        ) {
+          return false;
+        }
+
+        if (current.type === "PropertyDefinition" && !current.static) {
+          return false;
+        }
+
+        current = current.parent;
+      }
+
+      return false;
+    }
+
+    function isFunctionExecutedDuringModuleInitialization(node: FunctionLike): boolean {
+      if (node.type === "FunctionDeclaration") {
+        return false;
+      }
+
+      const parent = node.parent;
+
+      if (parent?.type === "CallExpression") {
+        if (parent.callee === node) {
+          return isInModuleInitializationPath(parent);
+        }
+
+        if (parent.arguments.includes(node)) {
+          return isInModuleInitializationPath(parent);
+        }
+      }
+
+      return false;
+    }
+
     function hasSchemaCreationCallAncestor(node: TSESTree.Node): boolean {
       let current = node.parent;
 
@@ -476,7 +580,9 @@ export const noInlineZodSchema = ESLintUtils.RuleCreator(
           current.type === "FunctionExpression" ||
           current.type === "ArrowFunctionExpression"
         ) {
-          return true;
+          if (!isFunctionExecutedDuringModuleInitialization(current)) {
+            return true;
+          }
         }
 
         if (current.type === "PropertyDefinition" && !current.static) {
