@@ -1,10 +1,13 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { ESLintUtils } from "@typescript-eslint/utils";
 import type { ParserServices, TSESTree } from "@typescript-eslint/utils";
 import type { Symbol as TypeScriptSymbol, Type, TypeChecker } from "typescript";
 
 const TYPESCRIPT_SYMBOL_FLAGS_ALIAS = 1 << 21;
+const ZOD_SOURCE_LITERAL_PATTERN = /["']zod(?:\/[^"']*)?["']/u;
+const RESOLVED_IMPORT_PATH_CACHE = new Map<string, string | null>();
+const LOCAL_SOURCE_HAS_ZOD_CACHE = new Map<string, boolean>();
 
 const ZOD_IMPORT_SOURCES = new Set([
   "zod",
@@ -285,10 +288,7 @@ function getStaticMemberName(node: TSESTree.MemberExpression): string | null {
 function getCallMethodName(node: TSESTree.CallExpression): string | null {
   const { callee } = node;
 
-  if (
-    callee.type === "MemberExpression" &&
-    getStaticMemberName(callee) !== null
-  ) {
+  if (callee.type === "MemberExpression") {
     return getStaticMemberName(callee);
   }
 
@@ -584,17 +584,10 @@ function isZodDeclarationFile(fileName: string): boolean {
 function isZodSchemaType(
   type: Type,
   services: ParserServices,
-  cache?: WeakMap<Type, boolean>,
   seen = new Set<Type>(),
 ): boolean {
   if (!hasFullTypeInformation(services)) {
     return false;
-  }
-
-  const cachedResult = cache?.get(type);
-
-  if (cachedResult !== undefined) {
-    return cachedResult;
   }
 
   if (seen.has(type)) {
@@ -617,11 +610,11 @@ function isZodSchemaType(
     result = true;
   } else if (type.isUnionOrIntersection()) {
     result = type.types.some((subType) =>
-      isZodSchemaType(subType, services, cache, seen),
+      isZodSchemaType(subType, services, seen),
     );
   } else if (
     type.getBaseTypes()?.some((baseType) =>
-      isZodSchemaType(baseType, services, cache, seen),
+      isZodSchemaType(baseType, services, seen),
     )
   ) {
     result = true;
@@ -634,24 +627,15 @@ function isZodSchemaType(
       ) ?? false;
   }
 
-  cache?.set(type, result);
-
   return result;
 }
 
 function isZodSymbol(
   symbol: TypeScriptSymbol | undefined,
   checker: TypeChecker,
-  cache?: WeakMap<TypeScriptSymbol, boolean>,
 ): boolean {
   if (!symbol) {
     return false;
-  }
-
-  const cachedResult = cache?.get(symbol);
-
-  if (cachedResult !== undefined) {
-    return cachedResult;
   }
 
   const symbols = [symbol];
@@ -660,15 +644,11 @@ function isZodSymbol(
     symbols.push(checker.getAliasedSymbol(symbol));
   }
 
-  const result = symbols.some((candidate) =>
+  return symbols.some((candidate) =>
     candidate.getDeclarations()?.some((declaration) =>
       isZodDeclarationFile(declaration.getSourceFile().fileName),
     ),
   );
-
-  cache?.set(symbol, result);
-
-  return result;
 }
 
 export const noInlineZodSchema = ESLintUtils.RuleCreator(
@@ -691,7 +671,6 @@ export const noInlineZodSchema = ESLintUtils.RuleCreator(
     const sourceCode = context.sourceCode;
     const parserServices = ESLintUtils.getParserServices(context, true);
     const schemaCreationCallCache = new WeakMap<TSESTree.CallExpression, boolean>();
-    const importSourceCache = new Map<string, boolean>();
 
     const getScope = (node: TSESTree.Node): ScopeLike => sourceCode.getScope(node);
 
@@ -700,7 +679,15 @@ export const noInlineZodSchema = ESLintUtils.RuleCreator(
         return null;
       }
 
-      const basePath = resolve(dirname(context.filename), source);
+      const sourceDirectory = dirname(context.filename);
+      const cacheKey = `${sourceDirectory}\0${source}`;
+      const cachedResult = RESOLVED_IMPORT_PATH_CACHE.get(cacheKey);
+
+      if (cachedResult !== undefined) {
+        return cachedResult;
+      }
+
+      const basePath = resolve(sourceDirectory, source);
       const candidates = source.endsWith(".js")
         ? [
             `${basePath.slice(0, -3)}.ts`,
@@ -717,11 +704,13 @@ export const noInlineZodSchema = ESLintUtils.RuleCreator(
             resolve(basePath, "index.js"),
           ];
 
-      return (
-        candidates.find(
-          (candidate) => existsSync(candidate) && statSync(candidate).isFile(),
-        ) ?? null
-      );
+      const resolvedPath =
+        candidates.find((candidate) => statSync(candidate, { throwIfNoEntry: false })?.isFile()) ??
+        null;
+
+      RESOLVED_IMPORT_PATH_CACHE.set(cacheKey, resolvedPath);
+
+      return resolvedPath;
     }
 
     function importSourceMayContainZodSchema(source: string): boolean {
@@ -735,15 +724,15 @@ export const noInlineZodSchema = ESLintUtils.RuleCreator(
         return false;
       }
 
-      const cachedResult = importSourceCache.get(importPath);
+      const cachedResult = LOCAL_SOURCE_HAS_ZOD_CACHE.get(importPath);
 
       if (cachedResult !== undefined) {
         return cachedResult;
       }
 
-      const result = /["']zod(?:\/[^"']*)?["']/u.test(readFileSync(importPath, "utf8"));
+      const result = ZOD_SOURCE_LITERAL_PATTERN.test(readFileSync(importPath, "utf8"));
 
-      importSourceCache.set(importPath, result);
+      LOCAL_SOURCE_HAS_ZOD_CACHE.set(importPath, result);
 
       return result;
     }
@@ -770,7 +759,7 @@ export const noInlineZodSchema = ESLintUtils.RuleCreator(
     }
 
     function fileMayContainZodSchemas(): boolean {
-      if (/["']zod(?:\/[^"']*)?["']/u.test(sourceCode.text)) {
+      if (ZOD_SOURCE_LITERAL_PATTERN.test(sourceCode.text)) {
         return true;
       }
 
