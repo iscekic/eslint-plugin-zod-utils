@@ -5,7 +5,7 @@ describe("plugin export", () => {
   it("exports package metadata", () => {
     expect(plugin.meta).toEqual({
       name: "eslint-plugin-zod-utils",
-      version: "1.0.11",
+      version: "1.0.12",
     });
   });
 

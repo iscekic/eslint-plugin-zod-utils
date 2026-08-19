@@ -571,10 +571,24 @@ function getZodReferenceFromExpression(
   return null;
 }
 
+// Hosts without a tseslint parser (for example oxlint's JS-plugin runtime)
+// provide no parser services at all, which makes getParserServices throw
+// before the syntactic fallback below can run. Treat that as "no type
+// information" instead.
+function tryGetParserServices(
+  context: Parameters<typeof ESLintUtils.getParserServices>[0],
+): ParserServices | null {
+  try {
+    return ESLintUtils.getParserServices(context, true);
+  } catch {
+    return null;
+  }
+}
+
 function hasFullTypeInformation(
-  services: ParserServices,
+  services: ParserServices | null,
 ): services is ParserServices & { program: NonNullable<ParserServices["program"]> } {
-  return services.program !== null;
+  return services !== null && services.program !== null;
 }
 
 function isZodDeclarationFile(fileName: string): boolean {
@@ -669,7 +683,7 @@ export const noInlineZodSchema = ESLintUtils.RuleCreator(
   defaultOptions: [],
   create(context) {
     const sourceCode = context.sourceCode;
-    const parserServices = ESLintUtils.getParserServices(context, true);
+    const parserServices = tryGetParserServices(context);
     const schemaCreationCallCache = new WeakMap<TSESTree.CallExpression, boolean>();
 
     const getScope = (node: TSESTree.Node): ScopeLike => sourceCode.getScope(node);

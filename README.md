@@ -122,6 +122,8 @@ function getTenantSchema() {
 }
 ```
 
+Type information is optional: on hosts that provide no parser services at all (for example oxlint's JS-plugin runtime), the rule falls back to the same syntactic detection instead of erroring.
+
 This type-aware detection does not use schema-name conventions. If type information is unavailable, imported schema roots are not inferred from names such as `UserSchema` or `UserZodSchema`. The rule also does not assume a global `z` identifier refers to Zod.
 
 ## Development
